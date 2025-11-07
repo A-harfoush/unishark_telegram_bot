@@ -1,5 +1,5 @@
 {
-  "routes": [
-    { "src": "/(.*)", "dest": "/api/telegram_bot.py" }
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/telegram_bot.py" }
   ]
 }
