@@ -1,6 +1,5 @@
 {
-  "functions": {
-    "api/telegram_bot.py": { "runtime": "python" }
-  },
-  "routes": [{ "src": "/(.*)", "dest": "/api/telegram_bot.py" }]
+  "routes": [
+    { "src": "/(.*)", "dest": "/api/telegram_bot.py" }
+  ]
 }
