@@ -1,43 +1,40 @@
 import os
 import logging
-from typing import Optional, Dict, Any
+from fastapi import FastAPI, Request, HTTPException, Response
 
-from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, Dispatcher, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
-
-# Logging setup
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-    force=True
-)
+# Logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# Token
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    logger.error("TELEGRAM_BOT_TOKEN not set")
+    raise ValueError("TELEGRAM_BOT_TOKEN is missing")
 
-# FastAPI app
-app = FastAPI()
+# Build application (global, with updater disabled for webhook-only)
+application = (
+    Application.builder()
+    .token(TOKEN)
+    .updater(None)  # Critical for serverless webhook
+    .read_timeout(7)
+    .get_updates_read_timeout(42)
+    .build()
+)
 
-# Pydantic model for Telegram webhook data (validates incoming JSON)
-class TelegramUpdate(BaseModel):
-    update_id: int
-    message: Optional[Dict[str, Any]] = None
-    edited_message: Optional[Dict[str, Any]] = None
-    # Add other fields as needed from Telegram's Update object
+# Add handlers globally (safe at module level)
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Your handlers (adapted for async)
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# Your handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
-   
-    logger.info(f"User {user.full_name} (ID: {user.id}) started the bot. Chat ID: {chat_id}")
-   
+    logger.info(f"User {user.full_name} (ID: {user.id}) started bot. Chat ID: {chat_id}")
+
     message = (
         f"<b>👋 Welcome to UniShark Bot, {user.first_name}!</b> 🦈\n\n"
         "I'm here to help you stay on top of your university tasks. Here is your unique ID to connect me to your account:\n\n"
@@ -52,64 +49,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "- ⏰ Approaching Deadlines\n\n"
         "Good luck with your studies! 🎓"
     )
-   
-    keyboard = [
-        [InlineKeyboardButton("Go to UniShark Website", url="https://unishark.site")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-   
-    await update.message.reply_html(
-        message,
-        reply_markup=reply_markup,
-        disable_web_page_preview=True,
-    )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message_text = update.message.text
-   
-    if message_text == "كسمك":
+    keyboard = [[InlineKeyboardButton("Go to UniShark Website", url="https://unishark.site")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_html(message, reply_markup=reply_markup, disable_web_page_preview=True)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "كسمك":
         await update.message.reply_text("الله يسامحك")
-    elif "حرفوش" in message_text:
+    elif "حرفوش" in text:
         await update.message.reply_text("حرفوش عمك")
 
-# Webhook endpoint
-@app.post("/{token}")
-async def telegram_webhook(token: str, request: Request):
-    if token != TELEGRAM_BOT_TOKEN:
-        raise HTTPException(status_code=403, detail="Invalid token")
-    
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN is not set")
-        raise HTTPException(status_code=500, detail="Bot token not configured")
-    
-    try:
-        data = await request.json()
-        logger.info("Received webhook POST request")
-        
-        # Create bot and dispatcher per request (serverless)
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        await application.initialize()  # Required for async setup
-        
-        dispatcher = Dispatcher(application.bot, None)
-        
-        # Add handlers
-        dispatcher.add_handler(CommandHandler("start", start))
-        dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-        # Process update
-        update = Update.de_json(data, application.bot)
-        await dispatcher.process_update(update)
-        
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        raise HTTPException(status_code=500, detail="Internal error")
+# FastAPI app
+app = FastAPI()
 
-# Health check endpoints
+# Health check
 @app.get("/")
 @app.get("/health")
-async def health_check():
-    logger.debug("Health check pinged")
+async def health():
     return {"status": "OK"}
 
-# No main() or polling—serverless handles invocation
+# Webhook endpoint (secure with token in path)
+@app.post("/{token}")
+async def webhook(token: str, request: Request):
+    if token != TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    try:
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+
+        # Per-request context (safe for serverless cold starts)
+        async with application:
+            await application.process_update(update)
+
+        return Response(content="OK", status_code=200)
+    except Exception as e:
+        logger.error(f"Webhook error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Processing failed")
