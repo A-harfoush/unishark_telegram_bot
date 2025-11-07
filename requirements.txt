@@ -1,5 +1,3 @@
-python-telegram-bot==21.4  # Update to latest if needed; your original uses ~v20
-fastapi==0.115.2
-uvicorn==0.31.1  # For local testing, but Vercel handles it
-aiohttp==3.10.10  # Keep if needed, but not used for the server
+fastapi==0.104.1
+python-telegram-bot==21.4
 python-dotenv==1.0.1
